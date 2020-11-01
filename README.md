@@ -1,0 +1,3 @@
+# Project Supernova
+
+This project adopted the Novation Twitch MIDI controller, after Novation and Serato discontinued official support for the device. It is very early days...
