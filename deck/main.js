@@ -4,10 +4,11 @@ context.audioWorklet.addModule("/deck/deck.js");
 
 export default class Deck {
 
-    constructor(trackname, autoconnect=true) {
+    constructor(deckname, trackname, autoconnect=true) {
 
-        console.log("launching...");
+        console.log(`Deck ${deckname}: Loading ${trackname} ...`);
 
+        this.deckname = deckname;
         this.trackname = trackname;
         this.context = context;
 
@@ -18,7 +19,7 @@ export default class Deck {
 
     async $boot() {
 
-        const binary = await fetch("deck.wasm");
+        const binary = await fetch("/deck/deck.wasm");
         const module = await binary.arrayBuffer();
 
         const track = await fetch(this.trackname);
@@ -35,30 +36,28 @@ export default class Deck {
 
         this.$node.port.onmessage = event => {
 
-            const { command, data } = event.data;
+            const command = event.data[0];
 
             if (command === "init") {
 
-                const memory = new Float32Array(data.buffer);
+                const memory = new Float32Array(event.data[1].buffer);
 
                 memory.set(audio.getChannelData(0), 256);
                 memory.set(audio.getChannelData(1), 256 + audio.length);
 
                 if (this.$autoconnect) this.$node.connect(context.destination);
 
-                console.log("ready!")
+                console.log(`Deck ${this.deckname}: Ready.`);
 
-            } else if (command === "news") console.log(data);
+            } else if (command === "news") console.log(event.data);
         };
-
     }
 
-    $post(command, data=null) {
+    news() { this.$node.port.postMessage(["news"]) }
 
-        this.$node.port.postMessage({command, data});
-    }
+    play() { this.$node.port.postMessage(["play"]) }
 
-    play() { this.$post("play") }
-    stop() { this.$post("stop") }
-    drop(position=0) { this.$post("drop", position) }
+    stop() { this.$node.port.postMessage(["stop"]) }
+
+    drop(position=0) { this.$node.port.postMessage(["drop", position]) }
 }

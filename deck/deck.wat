@@ -190,6 +190,14 @@
     f32.add
 )
 
+(func (export "news") (result f32)
+
+    (; This exported function simply reports the stylus posiiton. ;)
+
+    global.get $stylusPosition
+
+)
+
 (func (export "drop") (param f32)
 
     (; This exported function simply takes an f32 stylus position,
@@ -197,13 +205,5 @@
 
     local.get 0
     global.set $stylusPosition
-
-)
-
-(func (export "news") (result f32)
-
-    (; This exported function simply reports the stylus posiiton. ;)
-
-    global.get $stylusPosition
 
 )) ;; end of module

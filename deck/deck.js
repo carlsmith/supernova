@@ -30,9 +30,9 @@ class Deck extends AudioWorkletProcessor {
         const imports = {audio: {memory, dataOffset, dataLength}};
 
         this.memory = new Float32Array(memory.buffer);
-        this.instantiate = null;
-        this.drop = null;
+        this.interpolate = null;
         this.news = null;
+        this.drop = null;
         this.hold = true;
 
         WebAssembly.instantiate(module, imports).then(wasm => {
@@ -41,11 +41,11 @@ class Deck extends AudioWorkletProcessor {
             the Wasm module as instance attributes. */
 
             this.interpolate = wasm.instance.exports.interpolate;
-            this.drop = wasm.instance.exports.drop;
             this.news = wasm.instance.exports.news;
+            this.drop = wasm.instance.exports.drop;
         });
 
-        this.port.postMessage({command: "init", data: memory});
+        this.port.postMessage(["init", memory]);
 
         this.port.onmessage = event => {
 
@@ -53,11 +53,12 @@ class Deck extends AudioWorkletProcessor {
             main thread. Messages are always packaged as a hash with
             a `command` name string and a `data` value. */
 
-            const { command, data } = event.data;
+            const command = event.data[0];
 
-            if (command === "drop") this.drop(data);
+            if (command === "drop") this.drop(event.data[1]);
             else if (command === "stop") this.hold = true;
             else if (command === "play") this.hold = false;
+            else if (command === "news") this.port.postMessage(["news", this.news()]);
         };
     }
 
