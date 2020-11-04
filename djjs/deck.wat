@@ -1,9 +1,31 @@
 (module
 
-(import "audio" "memory" (memory 0 65536 shared))
-(import "audio" "dataLength" (global $dataLength f32))
-(import "audio" "dataOffset" (global $dataOffset i32))
+    (; This module implements the core logic of the audio processor
+    defined by `djjs/deck.processor.js`.
 
+    Due to limitations of the WebAudio API (being unable to share a
+    buffer more than KBs in length to or from the audio thread with-
+    out the thread dropping out), decks cannot be initialized while
+    the audio thread is playing music, forcing us to reuse the same
+    deck nodes throughout a set (allocating enough RAM initially to
+    store the largest tracks). Hopefully, this will change.
+
+    The module imports its memory, which is created by the processor
+    node, then shared with the main thread, which is responsable for
+    fetching, decoding and loading audio files into memory.
+
+    All communication between threads uses inboxes within the shared
+    memory that the main thread writes to and the audio thread reads
+    from (no atomics required).
+
+    The module exports one function, named `interpolate`, which gets
+    called by the `process` method of the audio processor, once for
+    each block of values. That function does all the real work.   ;)
+
+(import "audio" "memory" (memory 0 65536 shared))
+
+(global $dataOffset (mut i32) i32.const 0)
+(global $dataLength (mut f32) f32.const 0.0)
 (global $stylusPosition (mut f32) f32.const 0.0)
 
 (func (export "interpolate")
@@ -190,12 +212,29 @@
     f32.add
 )
 
+(func (export "sync") (param i32) (param f32)
+
+    (; This exported function takes a data offset and length,
+    updates the corresponding globals, then sets the stylus
+    position to zero. It is called whenever a new track is
+    loaded (once the data is in memory). ;)
+
+    local.get 0
+    global.set $dataOffset
+
+    local.get 1
+    global.set $dataLength
+
+    f32.const 0.0
+    global.set $stylusPosition
+)
+
 (func (export "news") (result f32)
 
-    (; This exported function simply reports the stylus posiiton. ;)
+    (; This exported function simply reports the current stylus
+    position. ;)
 
     global.get $stylusPosition
-
 )
 
 (func (export "drop") (param f32)

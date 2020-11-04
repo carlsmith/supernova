@@ -23,19 +23,18 @@ class Deck extends AudioWorkletProcessor {
 
         super();
 
-        const { dataOffset, dataLength, module } = args.processorOptions;
-        const pages = Math.ceil((1024 + dataLength * 8) / 64000);
+        const { module, pages } = args.processorOptions;
         const options = {initial: pages, maximum: pages, shared: true};
         const memory = new WebAssembly.Memory(options);
-        const imports = {audio: {memory, dataOffset, dataLength}};
 
         this.memory = new Float32Array(memory.buffer);
         this.interpolate = null;
         this.news = null;
         this.drop = null;
+        this.sync = null;
         this.hold = true;
 
-        WebAssembly.instantiate(module, imports).then(wasm => {
+        WebAssembly.instantiate(module, {audio: {memory}}).then(wasm => {
 
             /* This callback just stashes the functions exported by
             the Wasm module as instance attributes. */
@@ -43,6 +42,7 @@ class Deck extends AudioWorkletProcessor {
             this.interpolate = wasm.instance.exports.interpolate;
             this.news = wasm.instance.exports.news;
             this.drop = wasm.instance.exports.drop;
+            this.sync = wasm.instance.exports.sync;
         });
 
         this.port.postMessage(["init", memory]);
@@ -58,6 +58,7 @@ class Deck extends AudioWorkletProcessor {
             if (command === "drop") this.drop(event.data[1]);
             else if (command === "stop") this.hold = true;
             else if (command === "play") this.hold = false;
+            else if (command === "sync") this.sync(event.data[1], event.data[2]);
             else if (command === "news") this.port.postMessage(["news", this.news()]);
         };
     }
@@ -76,10 +77,12 @@ class Deck extends AudioWorkletProcessor {
 
         if (this.hold) return true;
 
+        const [L, R] = outputs[0];
+
         this.interpolate(params.pitch[0]);
 
-        outputs[0][0].set(this.memory.slice(0, 128));
-        outputs[0][1].set(this.memory.slice(128, 256));
+        L.set(this.memory.slice(0, 128));
+        R.set(this.memory.slice(128, 256));
 
         return true;
     }
