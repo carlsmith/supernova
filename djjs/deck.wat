@@ -32,27 +32,33 @@
 
     (param $pitch f32)
 
-    (local $loopIndex i32)                  ;; zero-indexed loop counter
-    (local $loopOffset i32)                 ;; four times the loop counter
-    (local $sampleOffset i32)               ;; index of the leading sample
-    (local $channelOffset i32)              ;; offset of right channel data
+    (local $loopOffset i32)
+    (local $trackLength f32)
+    (local $inputOffset i32)
+    (local $outputAddress i32)
     (local $projectedStylusPosition f32)
     (local $relativeProjectedStylusPosition f32)
 
     i32.const 0
-    local.tee $loopIndex
     local.set $loopOffset
+
+    i32.const 1032
+    f32.load
+    local.set $trackLength
 
     i32.const 1036
     i32.load
-    local.set $channelOffset
+    local.set $inputOffset
+
+    global.get $stylusPosition
+    local.set $projectedStylusPosition
 
     loop $mainLoop ;; generate a pair of samples...
 
         ;; check if the message in the play inbox differs from the
-        ;; current state of the `$playing` global
+        ;; current state of `$playing` (on every iteration)
 
-        i32.const 1024
+        i32.const 1024 ;; the address of the play-state inbox
         i32.load
         global.get $playing
 
@@ -66,47 +72,26 @@
             global.set $playing
 
             i32.const 0
-            local.tee $loopIndex
             local.set $loopOffset
+
+            global.get $stylusPosition
+            local.set $projectedStylusPosition
 
             br $mainLoop
 
         end
 
-        ;; check if the deck is currently playing (1) or stopped (0)
-
-        global.get $playing
-
-        i32.eqz if ;; the deck is currently stopped...
-
-            ;; emit silence for the current pair of samples
-
-            local.get $loopOffset
-            call $silence
-
-        else ;; the deck is currently playing...
-
-            ;; project the absolute position of the stylus at the point
-            ;; when the samples being interpolated by the current loop
-            ;; iteration will be output to the speakers
-
-            local.get $pitch
-            local.get $loopIndex
-            f32.convert_i32_u
-            f32.mul
-            global.get $stylusPosition
-            f32.add
-            local.tee $projectedStylusPosition
+        global.get $playing if
 
             ;; check if the projected stylus position falls outside the
             ;; track (before the first or after the last samples)
 
+            local.get $projectedStylusPosition
             f32.const 0.0
             f32.lt
 
             local.get $projectedStylusPosition
-            i32.const 1032
-            f32.load
+            local.get $trackLength
             f32.gt
 
             i32.or if ;; the stylus is outside the track...
@@ -127,7 +112,7 @@
                 i32.trunc_f32_u
                 i32.const 4
                 i32.mul
-                local.set $sampleOffset
+                local.set $outputAddress
 
                 local.get $projectedStylusPosition
                 local.get $projectedStylusPosition
@@ -139,10 +124,10 @@
 
                 local.get $loopOffset                       ;; result addr
 
-                local.get $sampleOffset                     ;; $x (in $lerp)
+                local.get $outputAddress                     ;; $x (in $lerp)
                 f32.load offset=1040
 
-                local.get $sampleOffset                     ;; $y (in $lerp)
+                local.get $outputAddress                     ;; $y (in $lerp)
                 f32.load offset=1044
 
                 local.get $relativeProjectedStylusPosition  ;; $a (in $lerp)
@@ -154,13 +139,13 @@
 
                 local.get $loopOffset                       ;; result addr
 
-                local.get $sampleOffset                     ;; $x (in $lerp)
-                local.get $channelOffset
+                local.get $outputAddress                     ;; $x (in $lerp)
+                local.get $inputOffset
                 i32.add
                 f32.load
 
-                local.get $sampleOffset                     ;; $y (in $lerp)
-                local.get $channelOffset
+                local.get $outputAddress                     ;; $y (in $lerp)
+                local.get $inputOffset
                 i32.add
                 f32.load offset=4
 
@@ -171,44 +156,40 @@
 
             end
 
+            ;; update the projected stylus position, ready for the next
+            ;; iteration (this only happens if the deck is playing, and
+            ;; will happen even when the stylus is outside the track)
+
+            local.get $pitch
+            local.get $projectedStylusPosition
+            f32.add
+            local.set $projectedStylusPosition
+
+        else ;; the deck is not playing...
+
+            local.get $loopOffset
+            call $silence
+
         end
 
-        ;; update the loop offset and index, then reiterate if required...
+        ;; update the loop offset, then continue if required...
 
         local.get $loopOffset
         i32.const 4
         i32.add
-        local.set $loopOffset
+        local.tee $loopOffset
 
-        local.get $loopIndex
-        i32.const 1
-        i32.add
-        local.tee $loopIndex
-
-        i32.const 128
+        i32.const 512
         i32.ne
 
         br_if $mainLoop
 
     end
 
-    ;; now, if `$playing`, update the stylus position to the end
-    ;; of the block that is now in RAM, ready for the CPU...
+    ;; update the global stylus position, before returning...
 
-    ;; TODO: move all this to the loop
-
-    global.get $playing
-
-    if
-
-        local.get $pitch
-        f32.const 128.0
-        f32.mul
-        global.get $stylusPosition
-        f32.add
-        global.set $stylusPosition
-
-    end
+    local.get $projectedStylusPosition
+    global.set $stylusPosition
 )
 
 (func $lerp

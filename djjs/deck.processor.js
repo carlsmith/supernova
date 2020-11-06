@@ -16,15 +16,13 @@ class Deck extends AudioWorkletProcessor {
         WebAssembly.instantiate(module, {audio: {memory}}).then(wasm => {
             this.interpolate = wasm.instance.exports.interpolate;
         });
-
     }
 
     process(inputs, outputs, params) {
 
-        try { this.interpolate(params.pitch[0]) }
-        catch (error) { return true };
-
         const [L, R] = outputs[0];
+
+        this.interpolate(params.pitch[0]);
 
         L.set(this.memory.slice(0, 128));
         R.set(this.memory.slice(128, 256));

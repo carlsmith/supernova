@@ -24,6 +24,8 @@ export default class Deck {
             outputChannelCount: [2],
         });
 
+        this.pitch = this.node.parameters.get("pitch");
+
         this.node.port.onmessage = event => {
 
             this.floats = new Float32Array(event.data.buffer);
