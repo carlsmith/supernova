@@ -35,7 +35,7 @@
     (local $loopOffset i32)
     (local $trackLength f32)
     (local $inputOffset i32)
-    (local $outputAddress i32)
+    (local $inputAddress i32)
     (local $projectedStylusPosition f32)
     (local $relativeProjectedStylusPosition f32)
 
@@ -56,7 +56,7 @@
     loop $mainLoop ;; generate a pair of samples...
 
         ;; check if the message in the play inbox differs from the
-        ;; current state of `$playing` (on every iteration)
+        ;; current state of `$playing`
 
         i32.const 1024 ;; the address of the play-state inbox
         i32.load
@@ -96,23 +96,16 @@
 
             i32.or if ;; the stylus is outside the track...
 
-                ;; emit silence for the current pair of samples
-
                 local.get $loopOffset
                 call $silence
 
             else ;; the stylus is within the track...
 
-                ;; the stylus is inside the track, and the deck is playing, so
-                ;; compute the offset of the sample before the stylus and the
-                ;; position of the stylus (as a fraction of one), relative
-                ;; to the samples either side of it
-
                 local.get $projectedStylusPosition
                 i32.trunc_f32_u
                 i32.const 4
                 i32.mul
-                local.set $outputAddress
+                local.set $inputAddress
 
                 local.get $projectedStylusPosition
                 local.get $projectedStylusPosition
@@ -124,10 +117,10 @@
 
                 local.get $loopOffset                       ;; result addr
 
-                local.get $outputAddress                     ;; $x (in $lerp)
+                local.get $inputAddress                    ;; $x (in $lerp)
                 f32.load offset=1040
 
-                local.get $outputAddress                     ;; $y (in $lerp)
+                local.get $inputAddress                    ;; $y (in $lerp)
                 f32.load offset=1044
 
                 local.get $relativeProjectedStylusPosition  ;; $a (in $lerp)
@@ -139,12 +132,12 @@
 
                 local.get $loopOffset                       ;; result addr
 
-                local.get $outputAddress                     ;; $x (in $lerp)
+                local.get $inputAddress                    ;; $x (in $lerp)
                 local.get $inputOffset
                 i32.add
                 f32.load
 
-                local.get $outputAddress                     ;; $y (in $lerp)
+                local.get $inputAddress                    ;; $y (in $lerp)
                 local.get $inputOffset
                 i32.add
                 f32.load offset=4
@@ -172,7 +165,8 @@
 
         end
 
-        ;; update the loop offset, then continue if required...
+        ;; update the loop offset (four times the loop index), then
+        ;; continue if there are more samples to interpolate...
 
         local.get $loopOffset
         i32.const 4
