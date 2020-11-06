@@ -1,20 +1,21 @@
 export default class Deck {
 
-    constructor(name, minutes) {
+    constructor(deckname, minutes) {
 
-        this.deckname = name;
+        this.deckname = deckname;
         this.pages = Math.ceil(minutes * 60 * 44100 * 8 / 2 ** 16);
+        this.integers = null;
         this.context = null;
-        this.memory = null;
+        this.floats = null;
         this.node = null;
     }
 
     async boot(context) {
 
+        this.context = context;
+
         const binary = await fetch("/djjs/deck.wasm");
         const module = await binary.arrayBuffer();
-
-        this.context = context;
 
         await context.audioWorklet.addModule("/djjs/deck.processor.js");
 
@@ -25,14 +26,9 @@ export default class Deck {
 
         this.node.port.onmessage = event => {
 
-            const command = event.data[0];
-
-            if (command === "init") {
-
-                this.memory = new Float32Array(event.data[1].buffer);
-                this.node.connect(this.context.destination);
-
-            } else if (command === "news") console.log(event.data);
+            this.floats = new Float32Array(event.data.buffer);
+            this.integers = new Uint32Array(event.data.buffer, 1024, 4);
+            this.node.connect(this.context.destination);
         };
 
         return this;
@@ -40,28 +36,21 @@ export default class Deck {
 
     async load(trackname) {
 
-        this.stop();
-
         const track = await fetch(trackname);
         const buffer = await track.arrayBuffer();
         const audio = await this.context.decodeAudioData(buffer);
 
-        const dataLength = audio.length;
-        const dataOffset = 1024 + dataLength * 4;
-
-        this.memory.set(audio.getChannelData(0), 256);
-        this.memory.set(audio.getChannelData(1), 256 + audio.length);
-
-        this.node.port.postMessage(["sync", dataOffset, dataLength]);
+        this.sendPlay(0);
+        this.sendLength(audio.length);
+        this.sendOffset(1040 + audio.length * 4);
+        this.floats.set(audio.getChannelData(0), 260);
+        this.floats.set(audio.getChannelData(1), 260 + audio.length);
 
         return this;
     }
 
-    news() { this.node.port.postMessage(["news"]) }
-
-    play() { this.node.port.postMessage(["play"]) }
-
-    stop() { this.node.port.postMessage(["stop"]) }
-
-    drop(position=0) { this.node.port.postMessage(["drop", position]) }
+    sendPlay(state) { this.integers[0] = state }
+    sendDrop(position) { this.floats[257] = position }
+    sendLength(length) { this.floats[258] = length }
+    sendOffset(offset) { this.integers[3] = offset }
 }

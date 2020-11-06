@@ -1,68 +1,41 @@
 (module
 
     (; This module implements the core logic of the audio processor
-    defined by `djjs/deck.processor.js`.
-
-    Due to limitations of the WebAudio API (being unable to share a
-    buffer more than KBs in length to or from the audio thread with-
-    out the thread dropping out), decks cannot be initialized while
-    the audio thread is playing music, forcing us to reuse the same
-    deck nodes throughout a set (allocating enough RAM initially to
-    store the largest tracks). Hopefully, this will change.
-
-    The module imports its memory, which is created by the processor
-    node, then shared with the main thread, which is responsable for
-    fetching, decoding and loading audio files into memory.
-
-    All communication between threads uses inboxes within the shared
-    memory that the main thread writes to and the audio thread reads
-    from (no atomics required).
-
-    The module exports one function, named `interpolate`, which gets
-    called by the `process` method of the audio processor, once for
-    each block of values. That function does all the real work.   ;)
+    defined by `djjs/deck.processor.js`. ;)
 
 (import "audio" "memory" (memory 0 65536 shared))
 
-(global $dataOffset (mut i32) i32.const 0)
-(global $dataLength (mut f32) f32.const 0.0)
 (global $stylusPosition (mut f32) f32.const 0.0)
+(global $playing (mut i32) i32.const 0)
+
+(func $silence (param $offset i32)
+
+    (; This helper takes a sample offset (the address of the sample
+    for the left channel) and writes a zero to each channel for the
+    samples corresponding to the offset. ;)
+
+    local.get $offset
+    f32.const 0.0
+    f32.store
+
+    local.get $offset
+    f32.const 0.0
+    f32.store offset=512
+)
 
 (func (export "interpolate")
 
     (; This function is the entry-point for the `process` method of
     the audio processor. It computes the projected stylus position
     for the next 128 samples (one at a time, in a loop), and for
-    each position, interpolates a new sample for each channel.
-
-    Note: There is a textbook implementation of lerp (below) that is
-    used by this function to interpolate each new sample value.
-
-    Note: If a projected stylus position falls outside of the track,
-    zeroes (silence) will be generated for both channels instead.
-
-    The results are stored in the first 1KB of RAM, and immediately
-    copied to the CPU (by the JavaScript caller) when this function
-    returns.
-
-    The track data is expected to be in RAM, starting after the 1KB
-    that is reserved for the results, and there are global imports
-    that supply the track length (in samples) and the offset (as
-    a byte-wise address) of the right channel data in memory.
-
-    The signature is `$pitch f32 -> void`, where `$pitch` can be any
-    reasonable (possibly negative) value, as a fraction of one that
-    the stylus motion (over time) is multiplied by.
-
-    Note: The `$pitch` parameter is implemented as a WebAudio Param
-    in the JavaScript code that uses this module, and its current
-    value is passed in each time this function is called. ;)
+    each position, interpolates a new sample for each channel. ;)
 
     (param $pitch f32)
 
-    (local $loopIndex i32)
-    (local $loopOffset i32)
-    (local $sampleOffset i32)
+    (local $loopIndex i32)                  ;; zero-indexed loop counter
+    (local $loopOffset i32)                 ;; four times the loop counter
+    (local $sampleOffset i32)               ;; index of the leading sample
+    (local $channelOffset i32)              ;; offset of right channel data
     (local $projectedStylusPosition f32)
     (local $relativeProjectedStylusPosition f32)
 
@@ -70,94 +43,133 @@
     local.tee $loopIndex
     local.set $loopOffset
 
-    loop $mainLoop
+    i32.const 1036
+    i32.load
+    local.set $channelOffset
 
-        ;; begin by projecting the absolute position of the stylus
-        ;; when the samples being interpolated by the current loop
-        ;; iteration will be played...
+    loop $mainLoop ;; generate a pair of samples...
 
-        local.get $pitch
-        local.get $loopIndex
-        f32.convert_i32_u
-        f32.mul
-        global.get $stylusPosition
-        f32.add
-        local.tee $projectedStylusPosition
+        ;; check if the message in the play inbox differs from the
+        ;; current state of the `$playing` global
 
-        ;; check if the projected stylus position falls outside the
-        ;; track (as a predicate for the following block)...
+        i32.const 1024
+        i32.load
+        global.get $playing
 
-        f32.const 0.0
-        f32.lt
+        i32.ne if ;; the play-state has changed...
 
-        local.get $projectedStylusPosition
-        global.get $dataLength
-        f32.gt
+            ;; copy the new play-state from the inbox to the global,
+            ;; then reset the loop (to minimize response latency)
 
-        i32.or if
+            i32.const 1024
+            i32.load
+            global.set $playing
 
-            ;; if the stylus is outside the track, set both of the
-            ;; interpolated samples to zero...
+            i32.const 0
+            local.tee $loopIndex
+            local.set $loopOffset
+
+            br $mainLoop
+
+        end
+
+        ;; check if the deck is currently playing (1) or stopped (0)
+
+        global.get $playing
+
+        i32.eqz if ;; the deck is currently stopped...
+
+            ;; emit silence for the current pair of samples
 
             local.get $loopOffset
+            call $silence
+
+        else ;; the deck is currently playing...
+
+            ;; project the absolute position of the stylus at the point
+            ;; when the samples being interpolated by the current loop
+            ;; iteration will be output to the speakers
+
+            local.get $pitch
+            local.get $loopIndex
+            f32.convert_i32_u
+            f32.mul
+            global.get $stylusPosition
+            f32.add
+            local.tee $projectedStylusPosition
+
+            ;; check if the projected stylus position falls outside the
+            ;; track (before the first or after the last samples)
+
             f32.const 0.0
-            f32.store
-
-            local.get $loopOffset
-            f32.const 0.0
-            f32.store offset=512
-
-        else
-
-            ;; else, compute the offset of the leading sample and the
-            ;; relative position of the stylus (as a fraction of one)
-            ;; between the adjacent samples...
+            f32.lt
 
             local.get $projectedStylusPosition
-            i32.trunc_f32_u
-            i32.const 4
-            i32.mul
-            local.set $sampleOffset
-
-            local.get $projectedStylusPosition
-            local.get $projectedStylusPosition
-            f32.floor
-            f32.sub
-            local.set $relativeProjectedStylusPosition
-
-            ;; interpolate and store the sample for the left channel...
-
-            local.get $loopOffset                       ;; L result addr
-
-            local.get $sampleOffset                     ;; $x (in $lerp)
-            f32.load offset=1024
-
-            local.get $sampleOffset                     ;; $y (in $lerp)
-            f32.load offset=1028
-
-            local.get $relativeProjectedStylusPosition  ;; $a (in $lerp)
-
-            call $lerp
-            f32.store
-
-            ;; interpolate and store the sample for the right channel...
-
-            local.get $loopOffset                       ;; R result addr
-
-            local.get $sampleOffset                     ;; $x (in $lerp)
-            global.get $dataOffset
-            i32.add
+            i32.const 1032
             f32.load
+            f32.gt
 
-            local.get $sampleOffset                     ;; $y (in $lerp)
-            global.get $dataOffset
-            i32.add
-            f32.load offset=4
+            i32.or if ;; the stylus is outside the track...
 
-            local.get $relativeProjectedStylusPosition  ;; $a (in $lerp)
+                ;; emit silence for the current pair of samples
 
-            call $lerp
-            f32.store offset=512
+                local.get $loopOffset
+                call $silence
+
+            else ;; the stylus is within the track...
+
+                ;; the stylus is inside the track, and the deck is playing, so
+                ;; compute the offset of the sample before the stylus and the
+                ;; position of the stylus (as a fraction of one), relative
+                ;; to the samples either side of it
+
+                local.get $projectedStylusPosition
+                i32.trunc_f32_u
+                i32.const 4
+                i32.mul
+                local.set $sampleOffset
+
+                local.get $projectedStylusPosition
+                local.get $projectedStylusPosition
+                f32.floor
+                f32.sub
+                local.set $relativeProjectedStylusPosition
+
+                ;; interpolate and store the sample for the left channel
+
+                local.get $loopOffset                       ;; result addr
+
+                local.get $sampleOffset                     ;; $x (in $lerp)
+                f32.load offset=1040
+
+                local.get $sampleOffset                     ;; $y (in $lerp)
+                f32.load offset=1044
+
+                local.get $relativeProjectedStylusPosition  ;; $a (in $lerp)
+
+                call $lerp
+                f32.store
+
+                ;; interpolate and store the sample for the right channel
+
+                local.get $loopOffset                       ;; result addr
+
+                local.get $sampleOffset                     ;; $x (in $lerp)
+                local.get $channelOffset
+                i32.add
+                f32.load
+
+                local.get $sampleOffset                     ;; $y (in $lerp)
+                local.get $channelOffset
+                i32.add
+                f32.load offset=4
+
+                local.get $relativeProjectedStylusPosition  ;; $a (in $lerp)
+
+                call $lerp
+                f32.store offset=512
+
+            end
 
         end
 
@@ -180,14 +192,23 @@
 
     end
 
-    ;; now, update the stylus position to the end of the block...
+    ;; now, if `$playing`, update the stylus position to the end
+    ;; of the block that is now in RAM, ready for the CPU...
 
-    local.get $pitch
-    f32.const 128.0
-    f32.mul
-    global.get $stylusPosition
-    f32.add
-    global.set $stylusPosition
+    ;; TODO: move all this to the loop
+
+    global.get $playing
+
+    if
+
+        local.get $pitch
+        f32.const 128.0
+        f32.mul
+        global.get $stylusPosition
+        f32.add
+        global.set $stylusPosition
+
+    end
 )
 
 (func $lerp
@@ -210,39 +231,5 @@
     f32.mul
 
     f32.add
-)
-
-(func (export "sync") (param i32) (param f32)
-
-    (; This exported function takes a data offset and length,
-    updates the corresponding globals, then sets the stylus
-    position to zero. It is called whenever a new track is
-    loaded (once the data is in memory). ;)
-
-    local.get 0
-    global.set $dataOffset
-
-    local.get 1
-    global.set $dataLength
-
-    f32.const 0.0
-    global.set $stylusPosition
-)
-
-(func (export "news") (result f32)
-
-    (; This exported function simply reports the current stylus
-    position. ;)
-
-    global.get $stylusPosition
-)
-
-(func (export "drop") (param f32)
-
-    (; This exported function simply takes an f32 stylus position,
-    and sets the global register to the given value. ;)
-
-    local.get 0
-    global.set $stylusPosition
 
 )) ;; end of module
