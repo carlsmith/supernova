@@ -10,9 +10,14 @@ window.boot = async function() {
 
     DECK.A.load("/tracks/glow.mp3").then(deck => {
 
-        DECK.A.sendPlay(1);
+        DECK.A.play(1);
         DECK.A.pitch.setValueAtTime(1, context.currentTime)
         DECK.A.pitch.linearRampToValueAtTime(0.5, context.currentTime + 1);
         DECK.A.pitch.linearRampToValueAtTime(1.5, context.currentTime + 4);
+        DECK.A.pitch.linearRampToValueAtTime(1.0, context.currentTime + 8);
+
+        document.querySelector("body").addEventListener("keydown", function() {
+            DECK.A.drop(1e6);
+        });
     });
 };

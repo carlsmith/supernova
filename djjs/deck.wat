@@ -8,21 +8,6 @@
 (global $stylusPosition (mut f32) f32.const 0.0)
 (global $playing (mut i32) i32.const 0)
 
-(func $silence (param $offset i32)
-
-    (; This helper takes a sample offset (the address of the sample
-    for the left channel) and writes a zero to each channel for the
-    samples corresponding to the offset. ;)
-
-    local.get $offset
-    f32.const 0.0
-    f32.store
-
-    local.get $offset
-    f32.const 0.0
-    f32.store offset=512
-)
-
 (func (export "interpolate")
 
     (; This function is the entry-point for the `process` method of
@@ -43,32 +28,60 @@
     local.set $loopOffset
 
     i32.const 1032
-    f32.load
+    f32.load align=2
     local.set $trackLength
 
     i32.const 1036
-    i32.load
+    i32.load align=2
     local.set $inputOffset
 
     global.get $stylusPosition
     local.set $projectedStylusPosition
 
-    loop $mainLoop ;; generate a pair of samples...
+    loop $mainLoop
 
-        ;; check if the message in the play inbox differs from the
-        ;; current state of `$playing`
+        (; ---- CHECK THE DROP INBOX FOR INCOMING MESSAGES ---- ;)
+
+        i32.const 1028 ;; the address of the drop inbox
+        f32.load align=2
+        f32.const -1e6 ;; the value used when the inbox is empty
+
+        f32.ne if ;; the drop inbox contains a message...
+
+            ;; reset the loop offset, load the stylus position from the
+            ;; inbox, clear the inbox, update both of the stylus position
+            ;; registers, then branch to the start of the main loop
+
+            i32.const 0
+            local.set $loopOffset
+
+            i32.const 1028      ;; IMPORTANT: This section creates a race
+            f32.load align=2    ;; condition, where the main thread stores
+                                ;; a message after the load operation, but
+            i32.const 1028      ;; before the store operation, causing the
+            f32.const -1e6      ;; message to be clobbered and lost. This
+            f32.store align=2   ;; is unlikely, but *must* be fixed.
+
+            local.tee $projectedStylusPosition
+            global.set $stylusPosition
+
+            br $mainLoop
+
+        end
+
+        (; ---- CHECK THE PLAY INBOX FOR INCOMING MESSAGES ---- ;)
 
         i32.const 1024 ;; the address of the play-state inbox
-        i32.load
+        i32.load align=2
         global.get $playing
 
         i32.ne if ;; the play-state has changed...
 
             ;; copy the new play-state from the inbox to the global,
-            ;; then reset the loop (to minimize response latency)
+            ;; then reset the loop and stylus position etc
 
             i32.const 1024
-            i32.load
+            i32.load align=2
             global.set $playing
 
             i32.const 0
@@ -80,6 +93,8 @@
             br $mainLoop
 
         end
+
+        (; ----- COMPUTE THE OUTPUT SAMPLES BASED ON THE STATE ----- ;)
 
         global.get $playing if
 
@@ -101,11 +116,20 @@
 
             else ;; the stylus is within the track...
 
+                ;; compute the address of the leading sample for the left
+                ;; channel (`$inputAddress`), which is also used to load
+                ;; the trailing sample and the corresponding samples of
+                ;; the right channel (using fixed offsets)
+
                 local.get $projectedStylusPosition
                 i32.trunc_f32_u
                 i32.const 4
                 i32.mul
                 local.set $inputAddress
+
+                ;; compute the projected stylus position relative to the
+                ;; samples either side it, as a fraction of one (this is
+                ;; the `$a` arg to the `$lerp` function)
 
                 local.get $projectedStylusPosition
                 local.get $projectedStylusPosition
@@ -115,37 +139,37 @@
 
                 ;; interpolate and store the sample for the left channel
 
-                local.get $loopOffset                       ;; result addr
+                local.get $loopOffset
 
-                local.get $inputAddress                    ;; $x (in $lerp)
-                f32.load offset=1040
+                local.get $inputAddress
+                f32.load offset=1040 align=2
 
-                local.get $inputAddress                    ;; $y (in $lerp)
-                f32.load offset=1044
+                local.get $inputAddress
+                f32.load offset=1044 align=2
 
-                local.get $relativeProjectedStylusPosition  ;; $a (in $lerp)
+                local.get $relativeProjectedStylusPosition
 
                 call $lerp
-                f32.store
+                f32.store align=2
 
                 ;; interpolate and store the sample for the right channel
 
-                local.get $loopOffset                       ;; result addr
+                local.get $loopOffset
 
-                local.get $inputAddress                    ;; $x (in $lerp)
+                local.get $inputAddress
                 local.get $inputOffset
                 i32.add
-                f32.load
+                f32.load align=2
 
-                local.get $inputAddress                    ;; $y (in $lerp)
+                local.get $inputAddress
                 local.get $inputOffset
                 i32.add
-                f32.load offset=4
+                f32.load offset=4 align=2
 
-                local.get $relativeProjectedStylusPosition  ;; $a (in $lerp)
+                local.get $relativeProjectedStylusPosition
 
                 call $lerp
-                f32.store offset=512
+                f32.store offset=512 align=2
 
             end
 
@@ -172,7 +196,6 @@
         i32.const 4
         i32.add
         local.tee $loopOffset
-
         i32.const 512
         i32.ne
 
@@ -180,20 +203,18 @@
 
     end
 
-    ;; update the global stylus position, before returning...
+    (; ---- UPDATE THE GLOBAL STYLUS POSITION BEFORE RETURNING ---- ;)
 
     local.get $projectedStylusPosition
     global.set $stylusPosition
 )
 
-(func $lerp
+(func $lerp (param $x f32) (param $y f32) (param $a f32) (result f32)
 
     (; This function takes the values of two adjacent samples, as
     `$x` and `$y`, and interpolates (linearly) a new sample between
     them, at a relative position (that is expressed as a fraction of
     one), given by the third argument, `$a`. ;)
-
-    (param $x f32) (param $y f32) (param $a f32) (result f32)
 
     f32.const 1.0
     local.get $a
@@ -206,5 +227,19 @@
     f32.mul
 
     f32.add
+)
 
-)) ;; end of module
+(func $silence (param $address i32)
+
+    (; This helper takes the adddress of an output sample for the
+    left channel, and writes a zero to the corresponding samples
+    for both channels. ;)
+
+    local.get $address
+    f32.const 0.0
+    f32.store align=2
+
+    local.get $address
+    f32.const 0.0
+    f32.store offset=512 align=2
+))

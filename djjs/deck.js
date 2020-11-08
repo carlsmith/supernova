@@ -42,17 +42,18 @@ export default class Deck {
         const buffer = await track.arrayBuffer();
         const audio = await this.context.decodeAudioData(buffer);
 
-        this.sendPlay(0);
-        this.sendLength(audio.length);
-        this.sendOffset(1040 + audio.length * 4);
+        this.play(0);
+        this.floats[257] = -1e7;
+        this.setLength(audio.length);
+        this.setOffset(1040 + audio.length * 4);
         this.floats.set(audio.getChannelData(0), 260);
         this.floats.set(audio.getChannelData(1), 260 + audio.length);
 
         return this;
     }
 
-    sendPlay(state) { this.integers[0] = state }
-    sendDrop(position) { this.floats[257] = position }
-    sendLength(length) { this.floats[258] = length }
-    sendOffset(offset) { this.integers[3] = offset }
+    play(state) { this.integers[0] = state }
+    drop(position) {this.floats[257] = position }
+    setLength(length) { this.floats[258] = length }
+    setOffset(offset) { this.integers[3] = offset }
 }
