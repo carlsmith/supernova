@@ -4,6 +4,7 @@ export default class Deck {
 
         this.deckname = deckname;
         this.pages = Math.ceil(minutes * 60 * 44100 * 8 / 2 ** 16);
+        this.dropCounter = 1;
         this.integers = null;
         this.context = null;
         this.floats = null;
@@ -29,7 +30,7 @@ export default class Deck {
         this.node.port.onmessage = event => {
 
             this.floats = new Float32Array(event.data.buffer);
-            this.integers = new Uint32Array(event.data.buffer, 1024, 4);
+            this.integers = new Uint32Array(event.data.buffer, 1024, 5);
             this.node.connect(this.context.destination);
         };
 
@@ -43,17 +44,21 @@ export default class Deck {
         const audio = await this.context.decodeAudioData(buffer);
 
         this.play(0);
-        this.floats[257] = -1e7;
         this.setLength(audio.length);
-        this.setOffset(1040 + audio.length * 4);
-        this.floats.set(audio.getChannelData(0), 260);
-        this.floats.set(audio.getChannelData(1), 260 + audio.length);
+        this.setOffset(1048 + audio.length * 4);
+        this.floats.set(audio.getChannelData(0), 262);
+        this.floats.set(audio.getChannelData(1), 262 + audio.length);
 
         return this;
     }
 
+    read() { return this.floats[261] }
     play(state) { this.integers[0] = state }
-    drop(position) {this.floats[257] = position }
-    setLength(length) { this.floats[258] = length }
-    setOffset(offset) { this.integers[3] = offset }
+    setLength(length) { this.floats[259] = length }
+    setOffset(offset) { this.integers[4] = offset }
+    drop(position) {
+        this.floats[258] = position;
+        Atomics.store(this.integers, 1, this.dropCounter);
+        this.dropCounter++;
+    }
 }

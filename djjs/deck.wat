@@ -1,11 +1,61 @@
 (module
 
     (; This module implements the core logic of the audio processor
-    defined by `djjs/deck.processor.js`. ;)
+    defined by `djjs/deck.processor.js`.
+
+    The size of the memory is set by the user. Either way, the memory
+    is fully aligned, containing only 32-bit values.
+
+    The first 1024 bytes of memory are used to store the interpolated
+    samples. Each block, for each channel (left, then right) contains
+    128 samples, each a 32-bit float. They are copied to the CPU each
+    time the `$interpolate` function returns.
+
+    The next six values are as follows:
+
+    + [1024] u32: the play-state inbox
+    + [1028] u32: the drop counter inbox
+    + [1032] f32: the drop position inbox
+    + [1036] f32: the track length inbox
+    + [1040] u32: the right channel offset inbox
+    + [1044] f32: the current stylus position outbox
+
+    The first five are only written to by the main thread, and read by
+    this module. The last value is only written to by this module, and
+    read by both this module and the main thread.
+
+    After the six values shared with the main thread, the samples that
+    were decoded from the audio file are stored. The data for the left
+    channel always starts at 1048.
+
+    As track lengths vary, the main thread supplies the offset of the
+    data for the right channel (as well as the length of the track in
+    samples), as described above.
+
+    When the play-state changes, the new state is written to the inbox
+    at address 1024, where a `0` means *stop* and a `1` means *play*.
+
+    When a drop is required, the new position is written to the inbox
+    at 1032, then the counter at 1028 is incremented. The two writes
+    are ordered atomically.
+
+    As we only care about the most recent change in play-state or drop
+    position (if more than one ever happen during the same block), the
+    setup described above is sufficient (and threadsafe).
+
+    Whenever a play-state change or a drop is handled, the loop inside
+    the `$interpolate` function is reset, causing the entire block of
+    interpolated samples to be recomputed. This minimizes latency as
+    much as (physically) possible.
+
+    The stylus position (as represented in memory) always points to the
+    start of the block currently being processed (its first sample),
+    or the start of the next block if the module is not currently
+    executing (the `$interpolate` function is not running). ;)
 
 (import "audio" "memory" (memory 0 65536 shared))
 
-(global $stylusPosition (mut f32) f32.const 0.0)
+(global $dropCounter (mut i32) i32.const 0)
 (global $playing (mut i32) i32.const 0)
 
 (func (export "interpolate")
@@ -27,49 +77,46 @@
     i32.const 0
     local.set $loopOffset
 
-    i32.const 1032
+    i32.const 1036
     f32.load align=2
     local.set $trackLength
 
-    i32.const 1036
+    i32.const 1040
     i32.load align=2
     local.set $inputOffset
 
-    global.get $stylusPosition
+    i32.const 1044
+    f32.load align=2
     local.set $projectedStylusPosition
 
     loop $mainLoop
 
-        (; ---- CHECK THE DROP INBOX FOR INCOMING MESSAGES ---- ;)
+        (; ------- CHECK THE DROP COUNTER INBOX FOR AN UPDATE ------- ;)
 
-        i32.const 1028 ;; the address of the drop inbox
-        f32.load align=2
-        f32.const -1e6 ;; the value used when the inbox is empty
+        i32.const 1028 ;; the address of the drop counter inbox
+        i32.load align=2
+        global.get $dropCounter
 
-        f32.ne if ;; the drop inbox contains a message...
+        i32.ne if ;; the drop position inbox contains a message...
 
-            ;; reset the loop offset, load the stylus position from the
-            ;; inbox, clear the inbox, update both of the stylus position
-            ;; registers, then branch to the start of the main loop
+            i32.const 1028
+            i32.load align=2
+            global.set $dropCounter
+
+            i32.const 1044
+            i32.const 1032
+            f32.load align=2
+            local.tee $projectedStylusPosition
+            f32.store align=2
 
             i32.const 0
             local.set $loopOffset
-
-            i32.const 1028      ;; IMPORTANT: This section creates a race
-            f32.load align=2    ;; condition, where the main thread stores
-                                ;; a message after the load operation, but
-            i32.const 1028      ;; before the store operation, causing the
-            f32.const -1e6      ;; message to be clobbered and lost. This
-            f32.store align=2   ;; is unlikely, but *must* be fixed.
-
-            local.tee $projectedStylusPosition
-            global.set $stylusPosition
 
             br $mainLoop
 
         end
 
-        (; ---- CHECK THE PLAY INBOX FOR INCOMING MESSAGES ---- ;)
+        (; ---------- CHECK THE PLAY INBOX FOR AN UPDATE ----------- ;)
 
         i32.const 1024 ;; the address of the play-state inbox
         i32.load align=2
@@ -87,7 +134,8 @@
             i32.const 0
             local.set $loopOffset
 
-            global.get $stylusPosition
+            i32.const 1044
+            f32.load align=2
             local.set $projectedStylusPosition
 
             br $mainLoop
@@ -142,10 +190,10 @@
                 local.get $loopOffset
 
                 local.get $inputAddress
-                f32.load offset=1040 align=2
+                f32.load offset=1044 align=2
 
                 local.get $inputAddress
-                f32.load offset=1044 align=2
+                f32.load offset=1048 align=2
 
                 local.get $relativeProjectedStylusPosition
 
@@ -205,8 +253,9 @@
 
     (; ---- UPDATE THE GLOBAL STYLUS POSITION BEFORE RETURNING ---- ;)
 
+    i32.const 1044
     local.get $projectedStylusPosition
-    global.set $stylusPosition
+    f32.store align=2
 )
 
 (func $lerp (param $x f32) (param $y f32) (param $a f32) (result f32)

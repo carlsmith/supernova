@@ -17,7 +17,16 @@ window.boot = async function() {
         DECK.A.pitch.linearRampToValueAtTime(1.0, context.currentTime + 8);
 
         document.querySelector("body").addEventListener("keydown", function() {
-            DECK.A.drop(1e6);
+            DECK.A.drop(1e4);
         });
+
+        const element = document.querySelector("output");
+
+        function loop(delta) {
+
+            element.innerText = parseInt(DECK.A.read());
+            requestAnimationFrame(loop);
+
+        } loop();
     });
 };
