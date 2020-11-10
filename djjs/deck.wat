@@ -21,6 +21,7 @@
     (local $inputOffset i32)
     (local $trackLength f64)
     (local $inputAddress i32)
+    (local $rightInputAddress i32)
     (local $projectedStylusPosition f64)
     (local $relativeProjectedStylusPosition f32)
 
@@ -114,11 +115,11 @@
                 local.get $inputAddress
                 local.get $inputOffset
                 i32.add
+
+                local.tee $rightInputAddress
                 f32.load align=4
 
-                local.get $inputAddress
-                local.get $inputOffset
-                i32.add
+                local.get $rightInputAddress
                 f32.load offset=4 align=4
 
                 local.get $relativeProjectedStylusPosition
@@ -133,6 +134,7 @@
             local.get $pitch
             local.get $projectedStylusPosition
             f64.add
+
             local.set $projectedStylusPosition
 
         else ;; the deck is not playing...
@@ -147,6 +149,7 @@
         local.get $loopOffset
         i32.const 4
         i32.add
+
         local.tee $loopOffset
         i32.const 512
         i32.ne
@@ -154,8 +157,6 @@
         br_if $mainLoop
 
     end
-
-    (; ---- UPDATE THE GLOBAL STYLUS POSITION BEFORE RETURNING ---- ;)
 
     i32.const 1056 ;; the global stylus position
     local.get $projectedStylusPosition
