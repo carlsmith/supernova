@@ -8,7 +8,6 @@
 (import "audio" "memory" (memory 0 65536 shared))
 
 (global $dropCounter (mut i32) i32.const 0)
-(global $playing (mut i32) i32.const 0)
 
 (func (export "interpolate")
 
@@ -17,20 +16,23 @@
 
     (param $pitch f64)
 
+    (local $playing i32)
     (local $loopOffset i32)
-    (local $inputOffset i32)
     (local $trackLength f64)
-    (local $inputAddress i32)
+    (local $leftInputAddress i32)
+    (local $rightInputOffset i32)
     (local $rightInputAddress i32)
     (local $projectedStylusPosition f64)
     (local $relativeProjectedStylusPosition f32)
+
+    ;; initialize the locals and sync state with the main thread...
 
     i32.const 0
     local.set $loopOffset
 
     i32.const 1024 ;; the play-state inbox
     i32.load align=4
-    global.set $playing
+    local.set $playing
 
     i32.const 1028 ;; drop counter inbox
     i32.load align=4
@@ -55,15 +57,17 @@
 
     i32.const 1032 ;; right channel offset inbox
     i32.load align=4
-    local.set $inputOffset
+    local.set $rightInputOffset
 
     i32.const 1056 ;; global stylus position
     f64.load align=8
     local.set $projectedStylusPosition
 
+    ;; iterate 128 times, generating a pair of samples each time...
+
     loop $mainLoop
 
-        global.get $playing if ;; the deck is playing...
+        local.get $playing if ;; the deck is playing...
 
             local.get $projectedStylusPosition
             f64.const 0.0
@@ -80,11 +84,18 @@
 
             else ;; the stylus is within the track...
 
+                ;; compute the addresses of the leading samples for each
+                ;; channel, and the relative projected stylus position
+
                 local.get $projectedStylusPosition
                 i32.trunc_f64_u
                 i32.const 4
                 i32.mul
-                local.set $inputAddress
+                local.tee $leftInputAddress
+
+                local.get $rightInputOffset
+                i32.add
+                local.set $rightInputAddress
 
                 local.get $projectedStylusPosition
                 local.get $projectedStylusPosition
@@ -97,10 +108,10 @@
 
                 local.get $loopOffset
 
-                local.get $inputAddress
+                local.get $leftInputAddress
                 f32.load offset=1072 align=4
 
-                local.get $inputAddress
+                local.get $leftInputAddress
                 f32.load offset=1076 align=4
 
                 local.get $relativeProjectedStylusPosition
@@ -112,11 +123,7 @@
 
                 local.get $loopOffset
 
-                local.get $inputAddress
-                local.get $inputOffset
-                i32.add
-
-                local.tee $rightInputAddress
+                local.get $rightInputAddress
                 f32.load align=4
 
                 local.get $rightInputAddress
@@ -127,7 +134,7 @@
                 call $lerp
                 f32.store offset=512 align=4
 
-            end
+            end ;; of if-block, predicated on the stylus position
 
             ;; update the projected stylus position (if `$playing`)...
 
@@ -142,7 +149,7 @@
             local.get $loopOffset
             call $silence
 
-        end
+        end ;; of the if-block, predicated on `$playing`
 
         ;; update the loop offset (four times the loop index)...
 
@@ -156,7 +163,9 @@
 
         br_if $mainLoop
 
-    end
+    end ;; of the mainloop
+
+    ;; update the super-global stylus position, before returning...
 
     i32.const 1056 ;; the global stylus position
     local.get $projectedStylusPosition
