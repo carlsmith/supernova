@@ -14,13 +14,13 @@ window.boot = async function() {
         DECK.A.pitch.setValueAtTime(1, context.currentTime)
         DECK.A.pitch.linearRampToValueAtTime(0.5, context.currentTime + 1);
         DECK.A.pitch.linearRampToValueAtTime(1.5, context.currentTime + 4);
-        DECK.A.pitch.linearRampToValueAtTime(1.0, context.currentTime + 8);
+        DECK.A.pitch.linearRampToValueAtTime(1.001, context.currentTime + 8);
 
         const element = document.querySelector("output");
 
         function loop(delta) {
 
-            element.innerText = parseInt(DECK.A.read());
+            element.innerText = DECK.A.read();
             requestAnimationFrame(loop);
 
         } loop();

@@ -1,10 +1,9 @@
-export default class Deck {
+ export default class Deck {
 
     constructor(deckname, minutes) {
 
         /* This constructor takes a deckname string and buffer size
         in minutes, and initializes the properties of the instance.
-
         The method cannot fully construct the deck instance, as that
         requires some async operations, which constructors cannot do,
         so the user must call `boot` on the instance to finalize the
@@ -13,20 +12,20 @@ export default class Deck {
         Generally, only the `deckname` property is externally useful
         (along with some methods). */
 
-        this.deckname = deckname;
         this.pages = Math.ceil(minutes * 60 * 44100 * 8 / 2 ** 16);
+        this.deckname = deckname;
         this.dropCounter = 1;
-        this.integers = null;
         this.context = null;
-        this.floats = null;
         this.node = null;
+        this.u32s = null;
+        this.f32s = null;
+        this.f64s = null;
     }
 
     async boot(context) {
 
         /* This method takes an audio context, and finishes off the
         initialization process (constructors cannot be async).
-
         The method is async, and returns a promise that resolves to
         the instance. It can be used like this:
 
@@ -56,12 +55,12 @@ export default class Deck {
             the processor shares its Wasm memory with the main thread.
             It assigns the required (f32 and u32) views of the memory
             to the instance, and connects the node to the speakers.
-
             Note: See the Wasm module's docstring for more details on
             how the memory is laid out. */
 
-            this.floats = new Float32Array(event.data.buffer);
-            this.integers = new Uint32Array(event.data.buffer, 1024, 5);
+            this.f32s = new Float32Array(event.data.buffer);
+            this.u32s = new Uint32Array(event.data.buffer, 1024, 3);
+            this.f64s = new Float64Array(event.data.buffer, 1040, 3);
 
             this.node.connect(this.context.destination);
         };
@@ -74,7 +73,6 @@ export default class Deck {
         /* This method takes a URL for a track. It fetches and decodes
         the given track, stops the deck, sets the track length and the
         channel data offset, then writes the samples to memory.
-
         This method is async, and returns a promise that resolves to
         the instance once the track has loaded:
 
@@ -86,9 +84,9 @@ export default class Deck {
 
         this.play(0);
         this.setLength(audio.length);
-        this.setOffset(1048 + audio.length * 4);
-        this.floats.set(audio.getChannelData(0), 262);
-        this.floats.set(audio.getChannelData(1), 262 + audio.length);
+        this.setOffset(1060 + audio.length * 4);
+        this.f32s.set(audio.getChannelData(0), 268);
+        this.f32s.set(audio.getChannelData(1), 268 + audio.length);
 
         return this;
     }
@@ -96,9 +94,9 @@ export default class Deck {
     read() {
 
         /* This method takes no arguments, and returns the current
-        position of the stylus (with block-level accuracy). */
+        position of the stylus. */
 
-        return this.floats[261];
+        return this.f64s[2];
     }
 
     play(state) {
@@ -108,7 +106,7 @@ export default class Deck {
         is written to the play-state inbox. The result is always
         `undefined`. */
 
-        this.integers[0] = state;
+        this.u32s[0] = state;
     }
 
     setLength(length) {
@@ -119,8 +117,7 @@ export default class Deck {
         module (which expects a float). The result is always
         `undefined`. */
 
-        this.floats[259] = length;
-        return this;
+        this.f64s[0] = length;
     }
 
     setOffset(offset) {
@@ -130,7 +127,7 @@ export default class Deck {
         just written to the offset inbox. The result is always
         `undefined`. */
 
-        this.integers[4] = offset;
+        this.u32s[2] = offset;
     }
 
     drop(position) {
@@ -141,7 +138,7 @@ export default class Deck {
         operations happen in the correct order. The result is
         always `undefined`. */
 
-        this.floats[258] = position;
-        Atomics.store(this.integers, 1, this.dropCounter++);
+        this.f64s[1] = position;
+        Atomics.store(this.u32s, 1, this.dropCounter++);
     }
 }

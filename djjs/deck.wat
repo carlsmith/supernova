@@ -15,49 +15,49 @@
     (; This function is the entry-point for the `process` method of
     the audio processor. ;)
 
-    (param $pitch f32)
+    (param $pitch f64)
 
     (local $loopOffset i32)
-    (local $trackLength f32)
     (local $inputOffset i32)
+    (local $trackLength f64)
     (local $inputAddress i32)
-    (local $projectedStylusPosition f32)
+    (local $projectedStylusPosition f64)
     (local $relativeProjectedStylusPosition f32)
 
     i32.const 0
     local.set $loopOffset
 
     i32.const 1024 ;; the play-state inbox
-    i32.load align=2
+    i32.load align=4
     global.set $playing
 
     i32.const 1028 ;; drop counter inbox
-    i32.load align=2
+    i32.load align=4
     global.get $dropCounter
 
     i32.ne if
 
         i32.const 1028 ;; drop counter inbox
-        i32.load align=2
+        i32.load align=4
         global.set $dropCounter
 
-        i32.const 1044 ;; global stylus position
-        i32.const 1032 ;; drop position inbox
-        f32.load align=2
-        f32.store align=2
+        i32.const 1056 ;; global stylus position
+        i32.const 1048 ;; drop position inbox
+        f64.load align=8
+        f64.store align=8
 
     end
 
-    i32.const 1036 ;; track length inbox
-    f32.load align=2
+    i32.const 1040 ;; track length inbox
+    f64.load align=8
     local.set $trackLength
 
-    i32.const 1040 ;; right channel offset inbox
-    i32.load align=2
+    i32.const 1032 ;; right channel offset inbox
+    i32.load align=4
     local.set $inputOffset
 
-    i32.const 1044 ;; global stylus position
-    f32.load align=2
+    i32.const 1056 ;; global stylus position
+    f64.load align=8
     local.set $projectedStylusPosition
 
     loop $mainLoop
@@ -65,12 +65,12 @@
         global.get $playing if ;; the deck is playing...
 
             local.get $projectedStylusPosition
-            f32.const 0.0
-            f32.lt
+            f64.const 0.0
+            f64.lt
 
             local.get $projectedStylusPosition
             local.get $trackLength
-            f32.gt
+            f64.gt
 
             i32.or if ;; the stylus is outside the track...
 
@@ -80,15 +80,16 @@
             else ;; the stylus is within the track...
 
                 local.get $projectedStylusPosition
-                i32.trunc_f32_u
+                i32.trunc_f64_u
                 i32.const 4
                 i32.mul
                 local.set $inputAddress
 
                 local.get $projectedStylusPosition
                 local.get $projectedStylusPosition
-                f32.floor
-                f32.sub
+                f64.floor
+                f64.sub
+                f32.demote_f64
                 local.set $relativeProjectedStylusPosition
 
                 ;; interpolate and store the sample for the left channel
@@ -96,15 +97,15 @@
                 local.get $loopOffset
 
                 local.get $inputAddress
-                f32.load offset=1044 align=2
+                f32.load offset=1072 align=4
 
                 local.get $inputAddress
-                f32.load offset=1048 align=2
+                f32.load offset=1076 align=4
 
                 local.get $relativeProjectedStylusPosition
 
                 call $lerp
-                f32.store align=2
+                f32.store align=4
 
                 ;; interpolate and store the sample for the right channel
 
@@ -113,17 +114,17 @@
                 local.get $inputAddress
                 local.get $inputOffset
                 i32.add
-                f32.load align=2
+                f32.load align=4
 
                 local.get $inputAddress
                 local.get $inputOffset
                 i32.add
-                f32.load offset=4 align=2
+                f32.load offset=4 align=4
 
                 local.get $relativeProjectedStylusPosition
 
                 call $lerp
-                f32.store offset=512 align=2
+                f32.store offset=512 align=4
 
             end
 
@@ -131,7 +132,7 @@
 
             local.get $pitch
             local.get $projectedStylusPosition
-            f32.add
+            f64.add
             local.set $projectedStylusPosition
 
         else ;; the deck is not playing...
@@ -156,9 +157,9 @@
 
     (; ---- UPDATE THE GLOBAL STYLUS POSITION BEFORE RETURNING ---- ;)
 
-    i32.const 1044
+    i32.const 1056 ;; the global stylus position
     local.get $projectedStylusPosition
-    f32.store align=2
+    f64.store align=8
 )
 
 (func $lerp (param $x f32) (param $y f32) (param $a f32) (result f32)
@@ -189,9 +190,9 @@
 
     local.get $address
     f32.const 0.0
-    f32.store align=2
+    f32.store align=4
 
     local.get $address
     f32.const 0.0
-    f32.store offset=512 align=2
+    f32.store offset=512 align=4
 ))

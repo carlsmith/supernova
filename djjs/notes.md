@@ -1,52 +1,83 @@
 DJJS: Notes for Developers
 ==========================
 
-Currently, this is experimental code, and these notes are largely
-for my own benefit. They will be expanded later.
+Currently, this is experimental code, and these notes are largely for my own benefit. They will be expanded later.
 
-The size of the memory is set by the user, and cannot be changed
-after the deck is initialized (as there is no way to do it with-
-out making the audio thread unstable). Either way, the memory
-is fully aligned, containing only 32-bit values.
+The code can be hosted with a static file server (just loading the `index.html` file implicitly), but it will not work unless the WAT code is compiled first. Assuming you are in the `djjs` directory, something like this is required:
 
-The first 1024 bytes of memory are used to store the interpolated
-samples. Each block, for each channel (left, then right) contains
-128 samples, each a 32-bit float. They are copied to the CPU each
-time the `$interpolate` function returns.
+    wat2wasm deck.wat -o deck.wasm --enable-threads
 
-The next six values are as follows:
+The Shared Memory
+-----------------
 
-+ [1024] u32: the play-state inbox
-+ [1028] u32: the drop counter inbox
-+ [1032] f32: the drop position inbox
-+ [1036] f32: the track length inbox
-+ [1040] u32: the right channel offset inbox
-+ [1044] f32: the current stylus position outbox
+The main thread and the Wasm module instances (running in the audio thread) each share a Wasm memory. All communication between the main thread and a given deck is implemented using the shared memory.
 
-The first five are only written to by the main thread, and read by
-this module. The last value is only written to by this module, and
-read by both this module and the main thread.
+Each deck has a memory buffer. Its length is set by the user, and cannot be changed after the deck is initialized (as there is no way to do it without making the audio thread unstable).
 
-After the six values shared with the main thread, the samples that
-were decoded from the audio file are stored. The data for the left
-channel always starts at 1048.
+The user defines the buffer length in minutes. The minutes are converted to the required bytes, then expanded slightly to include the memory required for internal use. The result is converted to 64KB pages (and rounded up).
 
-As track lengths vary, the main thread supplies the offset of the
-data for the right channel (as well as the length of the track in
-samples), as described above.
+Every value in the memory is properly aligned.
 
-When the play-state changes, the new state is written to the inbox
-at address 1024, where a `0` means *stop* and a `1` means *play*.
++ Messages use unsigned `i32` values for basic communication (indicating changes).
++ Sample data and related operations (including interpolation) use 32-bit
+  floats (between `-1` and `1`, and centered on `0`).
++ Stylus positions and related operations always use 64-bit floats, allowing for
+  high precision, no matter how long the track is.
 
-When a drop is required, the new position is written to the inbox
-at 1032, then the counter at 1028 is incremented. The two writes
-are ordered atomically.
+The memory is divided (conceptually) into three (contiguous) blocks:
 
-As we only care about the most recent change in play-state or drop
-position (if more than one ever happen during the same block), the
-setup described above is sufficient (and threadsafe).
++ The Results Block (1024 bytes).
++ The Message Block (384 bytes, 128 + 256).
++ The Loading Block (the rest of the memory).
 
-The stylus position (as represented in memory) always points to the
-start of the block currently being processed (its first sample),
-or the start of the next block if the module is not currently
-executing (the `$interpolate` function is not running).
+### The Results Block
+
+The Results Block occupies the first 1024 bytes of memory. It is used to store the interpolated samples that the Wasm module generates. Each block, for each channel (left, then right), contains 128 samples, each a 32-bit float.
+
+### The Message Block
+
+The Message Block occupies the 384 bytes that follow the Results Block. It contains four u32 slots, followed by four f64 slots:
+
++ 0 [1024] u32: the play-state inbox
++ 1 [1028] u32: the drop counter inbox
++ 2 [1032] u32: the right channel offset inbox
++ 3 [1036] ???: spare 32-bit slot
+
++ 0 [1040] f64: the track length inbox
++ 1 [1048] f64: the drop position inbox
++ 2 [1056] f64: the super-global stylus position
++ 3 [1064] ???: spare 64-bit slot
+
+Note: The track length is in samples, and is therefore always an integer. It is stored as an `f64` as the Wasm module needs to do `f64` arithmetic with it.
+
+The inboxes are only ever written to by the main thread, and are only ever read by the Wasm module.
+
+The super-global stylus position is only written to by the Wasm module, and is read by both the module and the main thread.
+
+### The Loading Block
+
+The Loading Block occupies the rest of the memory (after the Message Block). It is where the samples that were decoded from the audio file are stored. The data for the left channel always begins at `1072`. The offset of the right channel depends on the track length (and is the only offset that must be computed).
+
+As track lengths vary, the main thread writes the offset of the data for the right channel and the length of the track in samples (to the corresponding inboxes), as part of the process of loading a new track.
+
+Inboxes and Messages
+--------------------
+
+When the play-state changes, the new state is written (as an unsigned `i32`) to the play-state inbox (at `1024`), where a `0` means *stop* and a `1` means *play*.
+
+Note: When the deck is stopped, the `Deck` instance is still active, and the API continues to request samples. Due to a limitation of the API (which will hopefully be fixed), the Was module continues to output samples. It just zeroes them all out, so the deck is silenced. Likewise, when the stylus is outside the track, silence is emitted.
+
+When a drop is required, the new position is written (as an `f64`) to the drop position inbox (at `1048`), then the (`i32`) value in the drop counter inbox (at `1028`) is incremented. These two writes are ordered atomically.
+
+Note: Though it is generally unlikely in practice, if the play-state is updated more than once during the same render quantum, only the most recent matters. Likewise, if more than one drop is registered in the same quantum, earlier drops can be safely ignored.
+
+The `$interpolate` function (in the Wasm module) checks the play-state and drop counter inboxes before the samples are computed, and updates the state accordingly.
+
+The Stylus
+----------
+
+The *super-global stylus position* is an `f64` that is equal to the stylus position at the beginning of the block currently being interpolated. It is shared in memory (at `1056`), so the main loop can readily access it too.
+
+The Wasm module has an internal register (`$projectedStylusPosition`) which is used to project the stylus position forward to where it will be when a given sample is actually rendered.
+
+Note: The Wasm module also has an internal register named (`$relativeProjectedStylusPosition`) which hols the fractional part of the `$projectedStylusPosition`. This is computed using `f64` arithmetic, then demoted to an `f32` for passing to `$lerp` (which generally operates on `f32` samples). By the time the value is demoted to 32-bits, it is only a fraction of one, so the precision is not lost.
