@@ -20,14 +20,14 @@ class Deck extends AudioWorkletProcessor {
 
     process(inputs, outputs, params) {
 
-        const [L, R] = outputs[0];
+        if (this.interpolate && this.interpolate(params.pitch[0])) {
 
-        this.interpolate(params.pitch[0]);
+            const [L, R] = outputs[0];
 
-        L.set(this.memory.slice(0, 128));
-        R.set(this.memory.slice(128, 256));
+            L.set(this.memory.slice(0, 128));
+            R.set(this.memory.slice(128, 256));
 
-        return true;
+        } return true;
     }
 
     static get parameterDescriptors() {

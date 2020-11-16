@@ -1,19 +1,19 @@
  export default class Deck {
 
-    constructor(deckname, minutes) {
+    constructor(name, pages) {
 
-        /* This constructor takes a deckname string and buffer size
-        in minutes, and initializes the properties of the instance.
-        The method cannot fully construct the deck instance, as that
-        requires some async operations, which constructors cannot do,
-        so the user must call `boot` on the instance to finalize the
-        process.
+        /* This constructor takes a deck name string and buffer size
+        in pages. It initializes the properties of the instance. The
+        method cannot fully construct the instance, as that requires
+        some async operations (and constructors cannot be async), so
+        the `boot` method must be called to finalize the process.
 
-        Generally, only the `deckname` property is externally useful
-        (along with some methods). */
+        The convoluted initialization API cannot be avoided, so this
+        module binds a static helper named `Deck.initialize` to this
+        class (at the end of the file) that simplifies things. */
 
-        this.pages = Math.ceil(minutes * 60 * 44100 * 8 / 2 ** 16);
-        this.deckname = deckname;
+        this.name = name;
+        this.pages = pages;
         this.dropCounter = 1;
         this.context = null;
         this.node = null;
@@ -22,23 +22,24 @@
         this.f64s = null;
     }
 
-    async boot(context) {
+    async boot(context, module) {
 
-        /* This method takes an audio context, and finishes off the
-        initialization process (constructors cannot be async).
-        The method is async, and returns a promise that resolves to
-        the instance. It can be used like this:
+        /* This method takes an audio context and a reference to the
+        Wasm module, and uses them to finish off the initialization
+        process (as constructors cannot be async).
 
-            const audioContext = new AudioContext();
-            deck = await new Deck("A", 8).boot(audioContext);
+        The method returns a promise that resolves to the instance,
+        which produces this (convoluted) API:
 
-        The convoluted API is required, due to the way Web threads
-        work (in general, and Audio Worklets in particular). */
+            const context = new AudioContext();
+            const binary = await fetch(wasmModuleURL);
+            const module = await binary.arrayBuffer();
+
+            new Deck("A", 3000).boot(context, module).then(onboot);
+
+        A better API is provided by the `Deck.initialize` wrapper. */
 
         this.context = context;
-
-        const binary = await fetch("/djjs/deck.wasm");
-        const module = await binary.arrayBuffer();
 
         await context.audioWorklet.addModule("/djjs/deck.processor.js");
 
@@ -71,12 +72,16 @@
     async load(trackname) {
 
         /* This method takes a URL for a track. It fetches and decodes
-        the given track, stops the deck, sets the track length and the
-        channel data offset, then writes the samples to memory.
-        This method is async, and returns a promise that resolves to
-        the instance once the track has loaded:
+        the given track, then acquires the Drop Lock, stops the deck,
+        updates the Length and Offset inboxes, copies the samples to
+        memory, before releasing the lock.
 
-            deck.load("song.mp3").then(deck => deck.play(1));    */
+        This method is async, and returns a promise that resolves to
+        the instance once the track has loaded. This can be used with
+        the `await` syntax, but using the `then` method can be useful
+        for wrapping the instance-specific operations in a callback:
+
+            DECKA.load("song.mp3").then(deck => deck.play(1));      */
 
         const track = await fetch(trackname);
         const buffer = await track.arrayBuffer();
@@ -94,7 +99,7 @@
     read() {
 
         /* This method takes no arguments, and returns the current
-        position of the stylus. */
+        value. */
 
         return this.f64s[2];
     }
@@ -103,10 +108,10 @@
 
         /* This method takes an integer that is expected to be `0`
         or `1`, meaning *stop* and *play* respectively. The value
-        is written to the play-state inbox. The result is always
-        `undefined`. */
+        is written to the play-state inbox (atomically). The res-
+        ult is always `undefined`. */
 
-        this.u32s[0] = state;
+        Atomics.store(this.u32s, 0, state);
     }
 
     setLength(length) {
@@ -142,3 +147,40 @@
         Atomics.store(this.u32s, 1, this.dropCounter++);
     }
 }
+
+let wasmModule = undefined;
+let audioContext = undefined;
+
+Deck.initialize = async function(
+    name, minutes=8, context=audioContext, module=wasmModule) {
+
+    /* This static helper was added just to simplify the initial-
+    ization process. It takes four args:
+
+    + `name` String (required) a unique name for the deck
+    + `minutes` Number (optional) the buffer size (in minutes)
+    + `context` AudioContext (optional) the deck audio context
+    + `module` WebAssembly Module (optional) the implementation
+
+    The `minutes` arg defaults to `8`, and `context` defaults to a
+    context that is created locally (when required), then reused.
+    The `module` is similarly created (from `djjs/deck.wasm`) on
+    demand and reused.
+
+    This method is async, returning a promise that resolves to the
+    new deck instance:
+
+        const deck = await Deck.initialize("A");                */
+
+    const pages = Math.ceil(minutes * 60 * 44100 * 8 / 2 ** 16);
+
+    if (!context) context = audioContext = new AudioContext();
+
+    if (!module) {
+
+        const binary = await fetch("/djjs/deck.wasm");
+        module = wasmModule = await binary.arrayBuffer();
+    }
+
+    return await new Deck(name, pages).boot(context, module);
+};

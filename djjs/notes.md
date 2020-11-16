@@ -3,9 +3,17 @@ DJJS: Notes for Developers
 
 Currently, this is experimental code, and these notes are largely for my own benefit. They will be expanded later.
 
-The code can be hosted with a static file server (just loading the `index.html` file implicitly), but it will not work unless the WAT code is compiled first. Assuming you are in the `djjs` directory, something like this is required:
+Project Status
+--------------
 
-    wat2wasm deck.wat -o deck.wasm --enable-threads
+The code works well. The overall design is simple, light and reliable. However, the implementation currently has a number of race conditions (around the shared memory) that are highly unlikely to cause any actual issues, but obviously need addressing before the code is any use.
+
+The code can be tested easily enough. The WAT file (`deck.wat`) needs compiling as `deck.wasm`, then everything can be hosted with a static file server. Assuming you are in the project root directory, something like this is required:
+
+    wat2wasm djjs/deck.wat -o djjs/deck.wasm --enable-threads
+    ruby -run -ehttpd . -p8080
+
+Then point the browser at the index file (`index.html`).
 
 The Shared Memory
 -----------------
@@ -36,7 +44,9 @@ The Results Block occupies the first 1024 bytes of memory. It is used to store t
 
 ### The Message Block
 
-The Message Block occupies the 384 bytes that follow the Results Block. It contains four u32 slots, followed by four f64 slots:
+The Message Block occupies the 384 bytes that follow the Results Block. It will look very different, once the locks are implemented.
+
+The Message Block contains four u32 slots, followed by four f64 slots:
 
 + 0 [1024] u32: the play-state inbox
 + 1 [1028] u32: the drop counter inbox
@@ -54,9 +64,9 @@ The inboxes are only ever written to by the main thread, and are only ever read 
 
 The super-global stylus position is only written to by the Wasm module, and is read by both the module and the main thread.
 
-### The Loading Block
+### The Samples Block
 
-The Loading Block occupies the rest of the memory (after the Message Block). It is where the samples that were decoded from the audio file are stored. The data for the left channel always begins at `1072`. The offset of the right channel depends on the track length (and is the only offset that must be computed).
+The Samples Block occupies the rest of the memory (after the Message Block). It is where the samples that were decoded from the audio file are stored. The data for the left channel always begins at `1072`. The offset of the right channel depends on the track length (and is the only offset that must be computed).
 
 As track lengths vary, the main thread writes the offset of the data for the right channel and the length of the track in samples (to the corresponding inboxes), as part of the process of loading a new track.
 
