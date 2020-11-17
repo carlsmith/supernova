@@ -73,39 +73,53 @@ export default class Deck {
     async load(trackname) {
 
         /* This method takes a URL for a track. It fetches and decodes
-        the given track, then acquires the Drop Lock, stops the deck,
-        updates the Length and Offset inboxes, copies the samples to
-        memory, before releasing the lock.
+        the given track, then acquires the Sync Lock, stops the deck,
+        resets the stylus, updates the length and offset inboxes,
+        copies the samples to memory, and releases the lock.
 
         This method is async, and returns a promise that resolves to
-        `undefined`. */
+        the instance, supporting this API:
+
+            DECKA.load("music.mp3").then(deck => deck.play(1))
+
+        Note: Using a spinlock in this function is a bit nasty, when the
+        audio thread acquires it for an entire render quantum. Still, the
+        alternative (using `setTimeout` to try again on every iteration of
+        the JS event loop) would complicate the implementation, and would
+        not make things noticably more stable. */
 
         const track = await fetch(trackname);
         const buffer = await track.arrayBuffer();
         const audio = await this.context.decodeAudioData(buffer);
 
-        const attempt = (self) => {
+        while (Atomics.compareExchange(this.u32s, 4, 0, 1));
 
-            if (Atomics.compareExchange(self.u32s, 4, 0, 1)) return setTimeout(attempt, 0, self);
+        this.play(0);
+        this.drop(0);
+        this.f64s[0] = audio.length;
+        this.u32s[2] = 2048 + audio.length * 4;
+        this.f32s.set(audio.getChannelData(0), 512);
+        this.f32s.set(audio.getChannelData(1), 512 + audio.length);
 
-            self.play(0);
-            self.drop(0);
-            self.setLength(audio.length);
-            self.setOffset(2048 + audio.length * 4);
-            self.f32s.set(audio.getChannelData(0), 512);
-            self.f32s.set(audio.getChannelData(1), 512 + audio.length);
-            self.u32s[4] = 0; // release the sync lock
-        };
+        Atomics.store(this.u32s, 4, 0);
 
-        attempt(this);
+        return this;
     }
 
     read() {
 
-        /* This method takes no arguments, and returns the current
-        value of the Cannonical Stylus Position. */
+        /* This method takes no arguments. It uses a spinlock to
+        acquire the Stylus Lock and grab a copy of the Cannonical
+        Stylus Position, before releasing the lock and returning
+        the current stylus position. */
 
-        return this.f64s[2];
+        while (Atomics.compareExchange(this.u32s, 5, 0, 1));
+
+        const result = this.f64s[2];
+
+        Atomics.store(this.u32s, 5, 0);
+
+        return result;
     }
 
     play(state) {
@@ -118,33 +132,6 @@ export default class Deck {
         this.u32s[0] = state;
     }
 
-    setLength(length) {
-
-        /* This method takes an integer that is expected to be the
-        length of the current track (in samples). The argument is
-        written to the track length inbox, and read by the Wasm
-        module (which expects a float). The result is always
-        `undefined`.
-
-        This method is not threadsafe, unless called by a function
-        that has acquired the Sync Lock. */
-
-        this.f64s[0] = length;
-    }
-
-    setOffset(offset) {
-
-        /* This method takes an integer that is expected to be the
-        offset of the right channel data in memory. The integer is
-        just written to the offset inbox. The result is always
-        `undefined`.
-
-        This method is not threadsafe, unless called by a function
-        that has acquired the Sync Lock. */
-
-        this.u32s[2] = offset;
-    }
-
     drop(position) {
 
         /* This method takes a stylus position, and sends a drop
@@ -155,7 +142,8 @@ export default class Deck {
 
         this.f64s[1] = position;
         this.u32s[1] = this.dropCounter++;
-        this.u32s[3] = 0; // this will not tear
+
+        Atomics.store(this.u32s, 3, 0);
     }
 }
 

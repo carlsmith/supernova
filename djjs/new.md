@@ -67,7 +67,8 @@ The first sub-block currently contains the following five unsigned 32-bit intege
 + 1 [1028] u32: the Drop Counter Inbox
 + 2 [1032] u32: the Offset Inbox (offset of the right channel samples)
 + 3 [1036] u32: the Drop Locker (the state of the Drop Lock)
-+ 4 [1040] u32: the Sync Locker (the state of the Sync Lock)...
++ 4 [1040] u32: the Sync Locker (the state of the Sync Lock)
++ 5 [1044] u32: the Stylus Locker (the state of the Stylus Lock)...
 
 The second sub-block currently contains the following three 64-bit floats:
 
@@ -128,10 +129,12 @@ A stylus position is represented using an `f64`. They are measured in samples (t
 
 The implementation deals in a number of stylus positions, as it must project the stylus forward when computing a quantum, and handle drop events that define new stylus positions.
 
-The Cannonical Stylus Position is an `f64` that is equal to the stylus position at the beginning of the quatum that is about to be (or currently is being) interpolated. It lives in memory (at `1552`), so the main thread can readily access it too.
+The *Cannonical Stylus Position* is an `f64` that is equal to the stylus position at the beginning of the quatum that is about to be (or currently is being) interpolated. It lives in memory (at `1552`), so the main thread can readily access it too (using the Stylus Lock, described below).
 
 The `interpolate` function has a local register named `projectedStylusPosition`, which is used to project the stylus position forward to where it will be when a given sample is actually rendered.
 
 The `interpolate` function also has a local register named `relativeProjectedStylusPosition`, which holds the fractional part of the `projectedStylusPosition`. The `relativeProjectedStylusPosition` is computed using `f64` arithmetic, then demoted to an `f32` for passing to the `lerp` helper (which generally operates on `f32` samples).
 
 Note: By the time that `relativeProjectedStylusPosition` is demoted to 32-bits, it is only a fraction of one, so the precision is not lost.
+
+The Stylus Lock is used to prevent tearing the value of the Cannonical Stylus Position (an `f64`) when it is loaded by the main thread.

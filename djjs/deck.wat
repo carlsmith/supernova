@@ -199,17 +199,33 @@
 
     end ;; of the mainloop
 
-    ;; update the cannonical stylus position, then release the sync lock...
+    ;; use a spinlock to get the stylus lock, then update
+    ;; the cannonical stylus position...
+
+    loop $acquire
+
+        i32.const 1044 ;; stylus locker
+        i32.const 0
+        i32.const 1
+        i32.atomic.rmw.cmpxchg
+
+        br_if $acquire
+
+    end
 
     i32.const 1552 ;; cannonical stylus position
     local.get $projectedStylusPosition
     f64.store align=8
 
-    i32.const 1040 ;; sync locker
+    i32.const 1044 ;; stylus locker
     i32.const 0
     i32.store
 
-    ;; finally, return `1` so the results are copied to the cpu...
+    ;; release the sync lock, then return `1`...
+
+    i32.const 1040 ;; sync locker
+    i32.const 0
+    i32.store
 
     i32.const 1
 )
