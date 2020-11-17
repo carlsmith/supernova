@@ -1,4 +1,4 @@
- export default class Deck {
+export default class Deck {
 
     constructor(name, pages) {
 
@@ -54,14 +54,15 @@
 
             /* This handler is invoked exactly once (per instance), as
             the processor shares its Wasm memory with the main thread.
-            It assigns the required (f32 and u32) views of the memory
-            to the instance, and connects the node to the speakers.
+            It assigns the required views of memory to the instance,
+            and connects the node to the speakers.
+
             Note: See the Wasm module's docstring for more details on
             how the memory is laid out. */
 
             this.f32s = new Float32Array(event.data.buffer);
-            this.u32s = new Uint32Array(event.data.buffer, 1024, 3);
-            this.f64s = new Float64Array(event.data.buffer, 1040, 3);
+            this.u32s = new Uint32Array(event.data.buffer, 1024, 128);
+            this.f64s = new Float64Array(event.data.buffer, 1536, 64);
 
             this.node.connect(this.context.destination);
         };
@@ -77,29 +78,32 @@
         memory, before releasing the lock.
 
         This method is async, and returns a promise that resolves to
-        the instance once the track has loaded. This can be used with
-        the `await` syntax, but using the `then` method can be useful
-        for wrapping the instance-specific operations in a callback:
-
-            DECKA.load("song.mp3").then(deck => deck.play(1));      */
+        `undefined`. */
 
         const track = await fetch(trackname);
         const buffer = await track.arrayBuffer();
         const audio = await this.context.decodeAudioData(buffer);
 
-        this.play(0);
-        this.setLength(audio.length);
-        this.setOffset(1060 + audio.length * 4);
-        this.f32s.set(audio.getChannelData(0), 268);
-        this.f32s.set(audio.getChannelData(1), 268 + audio.length);
+        const attempt = (self) => {
 
-        return this;
+            if (Atomics.compareExchange(self.u32s, 4, 0, 1)) return setTimeout(attempt, 0, self);
+
+            self.play(0);
+            self.drop(0);
+            self.setLength(audio.length);
+            self.setOffset(2048 + audio.length * 4);
+            self.f32s.set(audio.getChannelData(0), 512);
+            self.f32s.set(audio.getChannelData(1), 512 + audio.length);
+            self.u32s[4] = 0; // release the sync lock
+        };
+
+        attempt(this);
     }
 
     read() {
 
         /* This method takes no arguments, and returns the current
-        value. */
+        value of the Cannonical Stylus Position. */
 
         return this.f64s[2];
     }
@@ -108,10 +112,10 @@
 
         /* This method takes an integer that is expected to be `0`
         or `1`, meaning *stop* and *play* respectively. The value
-        is written to the play-state inbox (atomically). The res-
-        ult is always `undefined`. */
+        is written to the play-state inbox (which is implicitly
+        atomic). The result is always `undefined`. */
 
-        Atomics.store(this.u32s, 0, state);
+        this.u32s[0] = state;
     }
 
     setLength(length) {
@@ -120,7 +124,10 @@
         length of the current track (in samples). The argument is
         written to the track length inbox, and read by the Wasm
         module (which expects a float). The result is always
-        `undefined`. */
+        `undefined`.
+
+        This method is not threadsafe, unless called by a function
+        that has acquired the Sync Lock. */
 
         this.f64s[0] = length;
     }
@@ -130,21 +137,25 @@
         /* This method takes an integer that is expected to be the
         offset of the right channel data in memory. The integer is
         just written to the offset inbox. The result is always
-        `undefined`. */
+        `undefined`.
+
+        This method is not threadsafe, unless called by a function
+        that has acquired the Sync Lock. */
 
         this.u32s[2] = offset;
     }
 
     drop(position) {
 
-        /* This method takes a stylus position, writes it to the
-        drop position inbox, then increments the value in the drop
-        counter register. An atomic store is used to ensure these
-        operations happen in the correct order. The result is
-        always `undefined`. */
+        /* This method takes a stylus position, and sends a drop
+        message to the audio thread (using the Drop Lock). The
+        result is always `undefined`. */
+
+        while (Atomics.compareExchange(this.u32s, 3, 0, 1));
 
         this.f64s[1] = position;
-        Atomics.store(this.u32s, 1, this.dropCounter++);
+        this.u32s[1] = this.dropCounter++;
+        this.u32s[3] = 0; // this will not tear
     }
 }
 

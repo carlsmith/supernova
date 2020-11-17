@@ -24,7 +24,7 @@
     (local $projectedStylusPosition f64)
     (local $relativeProjectedStylusPosition f32)
 
-    ;; initialize the locals and sync state with the main thread...
+    ;; sync with the current play state (this is implicitly atomic)...
 
     i32.const 1024 ;; the play-state inbox
     i32.load align=4
@@ -33,6 +33,19 @@
 
         i32.const 0
         return
+
+    end
+
+    ;; spin to acquire the drop lock, then handle any drop message...
+
+    loop $acquire
+
+        i32.const 1036 ;; drop locker
+        i32.const 0
+        i32.const 1
+        i32.atomic.rmw.cmpxchg
+
+        br_if $acquire
 
     end
 
@@ -46,25 +59,47 @@
         i32.load align=4
         global.set $dropCounter
 
-        i32.const 1056 ;; global stylus position
-        i32.const 1048 ;; drop position inbox
+        i32.const 1552 ;; cannonical stylus position
+        i32.const 1544 ;; drop position inbox
         f64.load align=8
         f64.store align=8
 
     end
 
+    i32.const 1036 ;; drop locker
+    i32.const 0
+    i32.store
+
+    ;; initialize the loop offset (always four times the loop index)...
+
     i32.const 0
     local.set $loopOffset
 
-    i32.const 1040 ;; track length inbox
+    ;; check the sync lock, and exit immediately if that fails...
+
+    i32.const 1040 ;; sync locker
+    i32.const 0
+    i32.const 1
+    i32.atomic.rmw.cmpxchg
+
+    if
+
+        i32.const 0
+        return
+
+    end
+
+    ;; the audio thread now has the sync lock...
+
+    i32.const 1536 ;; length inbox
     f64.load align=8
     local.set $trackLength
 
-    i32.const 1032 ;; right channel offset inbox
+    i32.const 1032 ;; offset inbox
     i32.load align=4
     local.set $rightInputOffset
 
-    i32.const 1056 ;; global stylus position
+    i32.const 1552 ;; cannonical stylus position
     f64.load align=8
     local.set $projectedStylusPosition
 
@@ -115,10 +150,10 @@
         local.get $loopOffset
 
         local.get $leftInputLocation
-        f32.load offset=1072 align=4
+        f32.load offset=2048 align=4
 
         local.get $leftInputLocation
-        f32.load offset=1076 align=4
+        f32.load offset=2052 align=4
 
         local.get $relativeProjectedStylusPosition
 
@@ -164,13 +199,19 @@
 
     end ;; of the mainloop
 
-    ;; update the cannonical stylus position, before returning `1`...
+    ;; update the cannonical stylus position, then release the sync lock...
 
-    i32.const 1056 ;; the cannonical stylus position
+    i32.const 1552 ;; cannonical stylus position
     local.get $projectedStylusPosition
     f64.store align=8
 
-    i32.const 1 ;; tell the process method to use the results block
+    i32.const 1040 ;; sync locker
+    i32.const 0
+    i32.store
+
+    ;; finally, return `1` so the results are copied to the cpu...
+
+    i32.const 1
 )
 
 (func $lerp ;; f32 f32 f32 -> f32
